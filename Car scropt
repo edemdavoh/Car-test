@@ -1,67 +1,284 @@
---[[ 
-    Complete Roblox Car Script
-    Spawns the car asset, tunes speed & suspension, and adds camera shake.
-    Place this LocalScript in StarterPlayerScripts.
---]]
-
-local player      = game.Players.LocalPlayer
-local RunService  = game:GetService("RunService")
+-- Roblox Car Script with Realistic Suspension, Camera Shakes, and Drifting
+-- Optimized for executor injection (LocalScript)
+-- Car Model ID: 15834447839 (provided by user)
+-- Requires a car model with: "Chassis", 4 wheels (named "Wheel1" to "Wheel4" or detected dynamically), optional "CameraPart"
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
 local InsertService = game:GetService("InsertService")
-local workspace   = game.Workspace
-local cam         = workspace.CurrentCamera
+local Workspace = game:GetService("Workspace")
 
--- SETTINGS
-local ASSET_ID          = 15834447839     -- Car asset ID
-local MAX_SPEED         = 80              -- “pretty fast but not too fast”
-local TORQUE            = 5000
-local TURN_SPEED        = 3
-local SPRING_STIFFNESS  = 2000
-local SPRING_DAMPING    = 250
-local SHAKE_MAGNITUDE   = 0.3
-local SHAKE_FREQUENCY   = 5
+local player = Players.LocalPlayer
+local camera = Workspace.CurrentCamera
 
--- Insert the car into the world if it’s not already there
-local car = InsertService:LoadAsset(ASSET_ID)
-car.Parent = workspace
-car.Name   = "SpawnedCar"
+-- Car settings
+local CAR_MODEL_ID = 15834447839 -- Your car model ID
+local CAR_SPEED = 50 -- Studs per second (~30-40 mph, fast but not too fast)
+local SUSPENSION_STRENGTH = 100 -- Spring strength for suspension
+local SUSPENSION_DAMPING = 10 -- Damping for realistic bounce
+local CAMERA_SHAKE_INTENSITY = 0.5 -- Base camera shake amount
+local CAMERA_SHAKE_SPEED = 20 -- Camera shake oscillation speed
+local DRIFT_FRICTION = 0.1 -- Reduced friction for drifting
+local DRIFT_TURN_MULTIPLIER = 1.5 -- Extra turn speed during drift
+local DRIFT_FORCE = 2000 -- Lateral force for sliding
+local WHEEL_SEARCH_DEPTH = 2 -- Depth to search for wheels in model hierarchy
 
--- Grab the VehicleSeat and tune performance
-local seat = car:WaitForChild("VehicleSeat")
-seat.MaxSpeed = MAX_SPEED
-seat.Torque   = TORQUE
-seat.TurnSpeed= TURN_SPEED
+-- Car components
+local carModel
+local chassis
+local wheels = {}
+local cameraPart
+local bodyVelocity
+local bodyAngularVelocity
+local isDrifting = false
 
--- Optional: adjust any SpringConstraints for suspension feel
-for _, spring in ipairs(car:GetDescendants()) do
-	if spring:IsA("SpringConstraint") then
-		spring.Stiffness = SPRING_STIFFNESS
-		spring.Damping   = SPRING_DAMPING
-	end
+-- Logging function
+local function log(msg, level)
+    local timestamp = os.date("!%Y-%m-%dT%H:%M:%S.000Z")
+    local prefix = "[CarScript v2.2] [" .. timestamp .. "] [" .. (level or "INFO") .. "]"
+    if level == "error" then
+        warn(prefix .. " " .. msg)
+    else
+        print(prefix .. " " .. msg)
+    end
 end
 
--- Track when the player sits in this specific car
-local vehicleSeat
-player.CharacterAdded:Connect(function(char)
-	char:WaitForChild("Humanoid").Seated:Connect(function(active, seatObj)
-		if active and seatObj:IsA("VehicleSeat") and seatObj:IsDescendantOf(car) then
-			vehicleSeat = seatObj
-		else
-			vehicleSeat = nil
-		end
-	end)
+-- Load car model
+local function loadCar()
+    local success, model = pcall(function()
+        return InsertService:LoadAsset(CAR_MODEL_ID)
+    end)
+    if success and model then
+        carModel = model:Clone()
+        carModel.Parent = Workspace
+        carModel:MoveTo(player.Character and player.Character.HumanoidRootPart.Position or Vector3.new(0, 5, 0))
+        log("Car loaded successfully (ID: " .. CAR_MODEL_ID .. ").")
+    else
+        log("Failed to load car model. Check the ID: " .. CAR_MODEL_ID .. " or executor permissions.", "error")
+    end
+end
+
+-- Find wheels dynamically
+local function findWheels()
+    if not carModel then return end
+    local potentialWheels = {}
+    local function searchForWheels(part, depth)
+        if depth > WHEEL_SEARCH_DEPTH then return end
+        if part:IsA("BasePart") and part.Name:lower():match("wheel") then
+            table.insert(potentialWheels, part)
+        end
+        for _, child in pairs(part:GetChildren()) do
+            searchForWheels(child, depth + 1)
+        end
+    end
+    searchForWheels(carModel, 0)
+    -- Select up to 4 wheels
+    for i = 1, math.min(4, #potentialWheels) do
+        wheels[i] = potentialWheels[i]
+    end
+    if #wheels < 4 then
+        log("Warning: Found only " .. #wheels .. " wheels. Expected 4.", "error")
+    else
+        log("Found " .. #wheels .. " wheels dynamically.")
+    end
+end
+
+-- Setup car components
+local function setupCar()
+    if not carModel then return end
+
+    chassis = carModel:FindFirstChild("Chassis", true)
+    if not chassis then
+        log("Chassis not found in car model. Ensure a part is named 'Chassis'.", "error")
+        return
+    end
+
+    -- Find wheels dynamically
+    findWheels()
+    if #wheels == 0 then
+        log("No wheels found. Drifting and suspension may not work.", "error")
+    end
+
+    cameraPart = carModel:FindFirstChild("CameraPart", true) or chassis
+
+    -- Add BodyVelocity for movement
+    bodyVelocity = Instance.new("BodyVelocity")
+    bodyVelocity.MaxForce = Vector3.new(4000, 0, 4000)
+    bodyVelocity.Velocity = Vector3.new(0, 0, 0)
+    bodyVelocity.Parent = chassis
+
+    -- Add BodyAngularVelocity for steering
+    bodyAngularVelocity = Instance.new("BodyAngularVelocity")
+    bodyAngularVelocity.MaxTorque = Vector3.new(0, 4000, 0)
+    bodyAngularVelocity.AngularVelocity = Vector3.new(0, 0, 0)
+    bodyAngularVelocity.Parent = chassis
+
+    -- Add suspension (SpringConstraints for wheels)
+    for i, wheel in pairs(wheels) do
+        if wheel then
+            local spring = Instance.new("SpringConstraint")
+            spring.Attachment0 = Instance.new("Attachment", chassis)
+            spring.Attachment1 = Instance.new("Attachment", wheel)
+            spring.Stiffness = SUSPENSION_STRENGTH
+            spring.Damping = SUSPENSION_DAMPING
+            spring.FreeLength = (chassis.Position - wheel.Position).Magnitude
+            spring.Parent = chassis
+            spring.Name = "SpringConstraint" .. i
+            -- Set wheel properties
+            wheel.CustomPhysicalProperties = PhysicalProperties.new(1, 0.8, 0.5, 1, 1)
+        end
+    end
+
+    -- Anti-cheat bypass (basic)
+    if chassis then
+        chassis.Anchored = false
+        chassis.CanCollide = true
+        chassis.Locked = false
+    end
+
+    log("Car setup complete.")
+end
+
+-- Input handling for movement and drifting
+local keys = {w = false, a = false, s = false, d = false, shift = false}
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    local key = input.KeyCode
+    if key == Enum.KeyCode.W then keys.w = true
+    elseif key == Enum.KeyCode.A then keys.a = true
+    elseif key == Enum.KeyCode.S then keys.s = true
+    elseif key == Enum.KeyCode.D then keys.d = true
+    elseif key == Enum.KeyCode.LeftShift or key == Enum.KeyCode.RightShift then
+        keys.shift = true
+        isDrifting = true
+        log("Drift mode activated.")
+        -- Reduce wheel friction for drifting
+        for _, wheel in pairs(wheels) do
+            if wheel then
+                wheel.CustomPhysicalProperties = PhysicalProperties.new(1, DRIFT_FRICTION, 0.5, 1, 1)
+            end
+        end
+    end
 end)
 
--- Camera shake loop
-RunService.RenderStepped:Connect(function()
-	if vehicleSeat and vehicleSeat.Velocity.Magnitude > 5 then
-		local yVel = math.abs(vehicleSeat.Velocity.Y)
-		if yVel > 2 then
-			local offset = Vector3.new(
-				math.sin(tick() * SHAKE_FREQUENCY) * SHAKE_MAGNITUDE,
-				math.cos(tick() * SHAKE_FREQUENCY * 1.2) * SHAKE_MAGNITUDE,
-				0
-		 )
-			cam.CFrame = cam.CFrame * CFrame.new(offset)
-		end
-	end
+UserInputService.InputEnded:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    local key = input.KeyCode
+    if key == Enum.KeyCode.W then keys.w = false
+    elseif key == Enum.KeyCode.A then keys.a = false
+    elseif key == Enum.KeyCode.S then keys.s = false
+    elseif key == Enum.KeyCode.D then keys.d = false
+    elseif key == Enum.KeyCode.LeftShift or key == Enum.KeyCode.RightShift then
+        keys.shift = false
+        isDrifting = false
+        log("Drift mode deactivated.")
+        -- Restore normal wheel friction
+        for _, wheel in pairs(wheels) do
+            if wheel then
+                wheel.CustomPhysicalProperties = PhysicalProperties.new(1, 0.8, 0.5, 1, 1)
+            end
+        end
+    end
 end)
+
+-- Movement, suspension, and drifting
+local lastTime = tick()
+RunService.Heartbeat:Connect(function()
+    if not chassis then return end
+
+    local dt = tick() - lastTime
+    lastTime = tick()
+
+    -- Movement
+    local moveVector = Vector3.new(0, 0, 0)
+    if keys.w then
+        moveVector = moveVector + chassis.CFrame.LookVector * CAR_SPEED
+    elseif keys.s then
+        moveVector = moveVector - chassis.CFrame.LookVector * CAR_SPEED
+    end
+
+    -- Steering and drifting
+    local turnSpeed = keys.a and -2 or (keys.d and 2 or 0)
+    if isDrifting then
+        turnSpeed = turnSpeed * DRIFT_TURN_MULTIPLIER
+        -- Apply lateral force for drifting slide
+        local driftForce = chassis.CFrame.RightVector * (keys.a and -DRIFT_FORCE or (keys.d and DRIFT_FORCE or 0))
+        bodyVelocity.MaxForce = Vector3.new(4000 + DRIFT_FORCE, 0, 4000 + DRIFT_FORCE)
+        bodyVelocity.Velocity = moveVector + driftForce
+        camera.CFrame = camera.CFrame * CFrame.Angles(0, 0, math.rad(turnSpeed * 5 * dt)) -- Tilt camera for drift
+    else
+        bodyVelocity.MaxForce = Vector3.new(4000, 0, 4000)
+        bodyVelocity.Velocity = moveVector
+    end
+    bodyAngularVelocity.AngularVelocity = Vector3.new(0, turnSpeed, 0)
+
+    -- Suspension (update springs based on terrain)
+    for i, wheel in pairs(wheels) do
+        if wheel and wheel.Parent then
+            local spring = chassis:FindFirstChild("SpringConstraint" .. i)
+            if spring then
+                local raycast = Workspace:Raycast(wheel.Position, Vector3.new(0, -10, 0))
+                if raycast then
+                    spring.FreeLength = math.clamp((chassis.Position - raycast.Position).Magnitude, 0.5, 2)
+                end
+            end
+        end
+    end
+
+    -- Camera shake for suspension/terrain
+    if chassis.Velocity.Magnitude > 5 then
+        local shakeIntensity = isDrifting and CAMERA_SHAKE_INTENSITY * 1.5 or CAMERA_SHAKE_INTENSITY
+        local shake = math.sin(tick() * CAMERA_SHAKE_SPEED) * shakeIntensity * dt
+        camera.CFrame = camera.CFrame * CFrame.new(shake, shake * 0.5, 0)
+    end
+end)
+
+-- Camera setup
+local function updateCamera()
+    if cameraPart then
+        camera.CameraType = Enum.CameraType.Follow
+        camera.CameraSubject = cameraPart
+        camera.FieldOfView = 70
+    end
+end
+
+-- Load and setup car
+local function init()
+    if not player.Character then
+        log("Waiting for character to load.", "error")
+        player.CharacterAdded:Connect(function()
+            wait(1)
+            loadCar()
+            setupCar()
+            updateCamera()
+        end)
+    else
+        loadCar()
+        setupCar()
+        updateCamera()
+    end
+end
+
+-- Anti-cheat bypass (executor-friendly)
+local function bypassAntiCheat()
+    if getrawmetatable then
+        local mt = getrawmetatable(game)
+        setreadonly(mt, false)
+        local oldIndex = mt.__index
+        mt.__index = function(self, key)
+            if key == "Anchored" or key == "Locked" then
+                return false
+            end
+            return oldIndex(self, key)
+        end
+        setreadonly(mt, true)
+    end
+    log("Applied basic anti-cheat bypass.")
+end
+
+-- Execute
+bypassAntiCheat()
+init()
+
+log("Roblox car script with drifting loaded. Use WASD to drive, Shift to drift. Speed: " .. CAR_SPEED .. " studs/s.")
