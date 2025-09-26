@@ -1,20 +1,16 @@
 -- Roblox Car Script with Realistic Suspension, Camera Shakes, and Drifting
--- Optimized for executor injection (LocalScript)
--- Car Model ID: 15834447839 (provided by user)
--- Requires a car model with: "Chassis", 4 wheels (named "Wheel1" to "Wheel4" or detected dynamically), optional "CameraPart"
+-- Executor-friendly: No InsertService, spawns car dynamically
+-- Car Model ID not needed—creates a custom car in workspace
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
-local TweenService = game:GetService("TweenService")
-local InsertService = game:GetService("InsertService")
 local Workspace = game:GetService("Workspace")
 
 local player = Players.LocalPlayer
 local camera = Workspace.CurrentCamera
 
 -- Car settings
-local CAR_MODEL_ID = 15834447839 -- Your car model ID
-local CAR_SPEED = 50 -- Studs per second (~30-40 mph, fast but not too fast)
+local CAR_SPEED = 50 -- Studs per second (fast but not too fast)
 local SUSPENSION_STRENGTH = 100 -- Spring strength for suspension
 local SUSPENSION_DAMPING = 10 -- Damping for realistic bounce
 local CAMERA_SHAKE_INTENSITY = 0.5 -- Base camera shake amount
@@ -22,7 +18,6 @@ local CAMERA_SHAKE_SPEED = 20 -- Camera shake oscillation speed
 local DRIFT_FRICTION = 0.1 -- Reduced friction for drifting
 local DRIFT_TURN_MULTIPLIER = 1.5 -- Extra turn speed during drift
 local DRIFT_FORCE = 2000 -- Lateral force for sliding
-local WHEEL_SEARCH_DEPTH = 2 -- Depth to search for wheels in model hierarchy
 
 -- Car components
 local carModel
@@ -36,7 +31,7 @@ local isDrifting = false
 -- Logging function
 local function log(msg, level)
     local timestamp = os.date("!%Y-%m-%dT%H:%M:%S.000Z")
-    local prefix = "[CarScript v2.2] [" .. timestamp .. "] [" .. (level or "INFO") .. "]"
+    local prefix = "[CarScript v2.4] [" .. timestamp .. "] [" .. (level or "INFO") .. "]"
     if level == "error" then
         warn(prefix .. " " .. msg)
     else
@@ -44,77 +39,65 @@ local function log(msg, level)
     end
 end
 
--- Load car model
-local function loadCar()
-    local success, model = pcall(function()
-        return InsertService:LoadAsset(CAR_MODEL_ID)
-    end)
-    if success and model then
-        carModel = model:Clone()
-        carModel.Parent = Workspace
-        carModel:MoveTo(player.Character and player.Character.HumanoidRootPart.Position or Vector3.new(0, 5, 0))
-        log("Car loaded successfully (ID: " .. CAR_MODEL_ID .. ").")
-    else
-        log("Failed to load car model. Check the ID: " .. CAR_MODEL_ID .. " or executor permissions.", "error")
-    end
-end
+-- Create custom car in workspace
+local function createCar()
+    carModel = Instance.new("Model")
+    carModel.Name = "CustomCar"
+    carModel.Parent = Workspace
 
--- Find wheels dynamically
-local function findWheels()
-    if not carModel then return end
-    local potentialWheels = {}
-    local function searchForWheels(part, depth)
-        if depth > WHEEL_SEARCH_DEPTH then return end
-        if part:IsA("BasePart") and part.Name:lower():match("wheel") then
-            table.insert(potentialWheels, part)
-        end
-        for _, child in pairs(part:GetChildren()) do
-            searchForWheels(child, depth + 1)
-        end
+    -- Chassis
+    chassis = Instance.new("Part")
+    chassis.Name = "Chassis"
+    chassis.Size = Vector3.new(5, 1, 8) -- Length, height, width
+    chassis.Position = player.Character.HumanoidRootPart.Position + Vector3.new(0, 5, 0)
+    chassis.Anchored = false
+    chassis.CanCollide = true
+    chassis.BrickColor = BrickColor.new("Bright blue")
+    chassis.Parent = carModel
+
+    -- Wheels
+    local wheelPositions = {
+        {x = -2, z = -3}, -- Front left
+        {x = 2, z = -3}, -- Front right
+        {x = -2, z = 3}, -- Rear left
+        {x = 2, z = 3} -- Rear right
+    }
+    for i = 1, 4 do
+        local wheel = Instance.new("Part")
+        wheel.Name = "Wheel" .. i
+        wheel.Shape = Enum.PartType.Cylinder
+        wheel.Size = Vector3.new(1.5, 1, 1.5)
+        wheel.Position = chassis.Position + Vector3.new(wheelPositions[i].x, -0.5, wheelPositions[i].z)
+        wheel.Anchored = false
+        wheel.CanCollide = true
+        wheel.CustomPhysicalProperties = PhysicalProperties.new(1, 0.8, 0.5, 1, 1)
+        wheel.BrickColor = BrickColor.new("Black")
+        wheel.Parent = carModel
+        wheels[i] = wheel
     end
-    searchForWheels(carModel, 0)
-    -- Select up to 4 wheels
-    for i = 1, math.min(4, #potentialWheels) do
-        wheels[i] = potentialWheels[i]
-    end
-    if #wheels < 4 then
-        log("Warning: Found only " .. #wheels .. " wheels. Expected 4.", "error")
-    else
-        log("Found " .. #wheels .. " wheels dynamically.")
-    end
+
+    cameraPart = chassis -- Use chassis as camera follow point (add "CameraPart" if needed)
+
+    log("Custom car spawned in workspace.")
 end
 
 -- Setup car components
 local function setupCar()
     if not carModel then return end
 
-    chassis = carModel:FindFirstChild("Chassis", true)
-    if not chassis then
-        log("Chassis not found in car model. Ensure a part is named 'Chassis'.", "error")
-        return
-    end
-
-    -- Find wheels dynamically
-    findWheels()
-    if #wheels == 0 then
-        log("No wheels found. Drifting and suspension may not work.", "error")
-    end
-
-    cameraPart = carModel:FindFirstChild("CameraPart", true) or chassis
-
-    -- Add BodyVelocity for movement
+    -- BodyVelocity for movement
     bodyVelocity = Instance.new("BodyVelocity")
     bodyVelocity.MaxForce = Vector3.new(4000, 0, 4000)
     bodyVelocity.Velocity = Vector3.new(0, 0, 0)
     bodyVelocity.Parent = chassis
 
-    -- Add BodyAngularVelocity for steering
+    -- BodyAngularVelocity for steering
     bodyAngularVelocity = Instance.new("BodyAngularVelocity")
     bodyAngularVelocity.MaxTorque = Vector3.new(0, 4000, 0)
     bodyAngularVelocity.AngularVelocity = Vector3.new(0, 0, 0)
     bodyAngularVelocity.Parent = chassis
 
-    -- Add suspension (SpringConstraints for wheels)
+    -- Suspension (SpringConstraints for wheels)
     for i, wheel in pairs(wheels) do
         if wheel then
             local spring = Instance.new("SpringConstraint")
@@ -125,22 +108,13 @@ local function setupCar()
             spring.FreeLength = (chassis.Position - wheel.Position).Magnitude
             spring.Parent = chassis
             spring.Name = "SpringConstraint" .. i
-            -- Set wheel properties
-            wheel.CustomPhysicalProperties = PhysicalProperties.new(1, 0.8, 0.5, 1, 1)
         end
-    end
-
-    -- Anti-cheat bypass (basic)
-    if chassis then
-        chassis.Anchored = false
-        chassis.CanCollide = true
-        chassis.Locked = false
     end
 
     log("Car setup complete.")
 end
 
--- Input handling for movement and drifting
+-- Input handling
 local keys = {w = false, a = false, s = false, d = false, shift = false}
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if gameProcessed then return end
@@ -153,11 +127,8 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
         keys.shift = true
         isDrifting = true
         log("Drift mode activated.")
-        -- Reduce wheel friction for drifting
         for _, wheel in pairs(wheels) do
-            if wheel then
-                wheel.CustomPhysicalProperties = PhysicalProperties.new(1, DRIFT_FRICTION, 0.5, 1, 1)
-            end
+            if wheel then wheel.CustomPhysicalProperties = PhysicalProperties.new(1, DRIFT_FRICTION, 0.5, 1, 1) end
         end
     end
 end)
@@ -173,11 +144,8 @@ UserInputService.InputEnded:Connect(function(input, gameProcessed)
         keys.shift = false
         isDrifting = false
         log("Drift mode deactivated.")
-        -- Restore normal wheel friction
         for _, wheel in pairs(wheels) do
-            if wheel then
-                wheel.CustomPhysicalProperties = PhysicalProperties.new(1, 0.8, 0.5, 1, 1)
-            end
+            if wheel then wheel.CustomPhysicalProperties = PhysicalProperties.new(1, 0.8, 0.5, 1, 1) end
         end
     end
 end)
@@ -190,43 +158,33 @@ RunService.Heartbeat:Connect(function()
     local dt = tick() - lastTime
     lastTime = tick()
 
-    -- Movement
     local moveVector = Vector3.new(0, 0, 0)
-    if keys.w then
-        moveVector = moveVector + chassis.CFrame.LookVector * CAR_SPEED
-    elseif keys.s then
-        moveVector = moveVector - chassis.CFrame.LookVector * CAR_SPEED
-    end
+    if keys.w then moveVector = moveVector + chassis.CFrame.LookVector * CAR_SPEED
+    elseif keys.s then moveVector = moveVector - chassis.CFrame.LookVector * CAR_SPEED end
 
-    -- Steering and drifting
     local turnSpeed = keys.a and -2 or (keys.d and 2 or 0)
     if isDrifting then
         turnSpeed = turnSpeed * DRIFT_TURN_MULTIPLIER
-        -- Apply lateral force for drifting slide
         local driftForce = chassis.CFrame.RightVector * (keys.a and -DRIFT_FORCE or (keys.d and DRIFT_FORCE or 0))
         bodyVelocity.MaxForce = Vector3.new(4000 + DRIFT_FORCE, 0, 4000 + DRIFT_FORCE)
         bodyVelocity.Velocity = moveVector + driftForce
-        camera.CFrame = camera.CFrame * CFrame.Angles(0, 0, math.rad(turnSpeed * 5 * dt)) -- Tilt camera for drift
+        camera.CFrame = camera.CFrame * CFrame.Angles(0, 0, math.rad(turnSpeed * 5 * dt))
     else
         bodyVelocity.MaxForce = Vector3.new(4000, 0, 4000)
         bodyVelocity.Velocity = moveVector
     end
     bodyAngularVelocity.AngularVelocity = Vector3.new(0, turnSpeed, 0)
 
-    -- Suspension (update springs based on terrain)
     for i, wheel in pairs(wheels) do
         if wheel and wheel.Parent then
             local spring = chassis:FindFirstChild("SpringConstraint" .. i)
             if spring then
                 local raycast = Workspace:Raycast(wheel.Position, Vector3.new(0, -10, 0))
-                if raycast then
-                    spring.FreeLength = math.clamp((chassis.Position - raycast.Position).Magnitude, 0.5, 2)
-                end
+                if raycast then spring.FreeLength = math.clamp((chassis.Position - raycast.Position).Magnitude, 0.5, 2) end
             end
         end
     end
 
-    -- Camera shake for suspension/terrain
     if chassis.Velocity.Magnitude > 5 then
         local shakeIntensity = isDrifting and CAMERA_SHAKE_INTENSITY * 1.5 or CAMERA_SHAKE_INTENSITY
         local shake = math.sin(tick() * CAMERA_SHAKE_SPEED) * shakeIntensity * dt
@@ -243,33 +201,14 @@ local function updateCamera()
     end
 end
 
--- Load and setup car
-local function init()
-    if not player.Character then
-        log("Waiting for character to load.", "error")
-        player.CharacterAdded:Connect(function()
-            wait(1)
-            loadCar()
-            setupCar()
-            updateCamera()
-        end)
-    else
-        loadCar()
-        setupCar()
-        updateCamera()
-    end
-end
-
--- Anti-cheat bypass (executor-friendly)
+-- Anti-cheat bypass
 local function bypassAntiCheat()
     if getrawmetatable then
         local mt = getrawmetatable(game)
         setreadonly(mt, false)
         local oldIndex = mt.__index
         mt.__index = function(self, key)
-            if key == "Anchored" or key == "Locked" then
-                return false
-            end
+            if key == "Anchored" or key == "Locked" then return false end
             return oldIndex(self, key)
         end
         setreadonly(mt, true)
@@ -277,8 +216,17 @@ local function bypassAntiCheat()
     log("Applied basic anti-cheat bypass.")
 end
 
--- Execute
-bypassAntiCheat()
-init()
+-- Initialize
+local function init()
+    if not player.Character then
+        log("Waiting for character to load.", "error")
+        player.CharacterAdded:Wait()
+    end
+    bypassAntiCheat()
+    createCar() -- Use createCar instead of loadCar
+    setupCar()
+    updateCamera()
+end
 
+init()
 log("Roblox car script with drifting loaded. Use WASD to drive, Shift to drift. Speed: " .. CAR_SPEED .. " studs/s.")
