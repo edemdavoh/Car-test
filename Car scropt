@@ -1,5 +1,5 @@
--- Roblox Car Script with Drifting and Camera Shakes
--- Luau script for Delta Executor, spawns Barbaro-Red (ID: 15834447839) via TextChatService command
+-- Roblox Car Script with Drifting
+-- Luau script for Delta Executor, detects Barbaro-Red (ID: 15834447839) spawn via TextChatService
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
@@ -13,12 +13,12 @@ local camera = Workspace.CurrentCamera
 -- Car settings
 local CAR_MODEL_ID = 15834447839 -- Barbaro-Red car from catalog
 local CAR_SPEED = 50 -- Studs per second (~30-40 mph)
-local CAMERA_SHAKE_INTENSITY = 0.5
-local CAMERA_SHAKE_SPEED = 20
 local DRIFT_FRICTION = 0.1
 local DRIFT_TURN_MULTIPLIER = 1.5
 local DRIFT_FORCE = 2000
-local SPAWN_OFFSET = Vector3.new(0, 0, -10) -- Offset to detach from character
+local CAMERA_SHAKE_INTENSITY = 0.5
+local CAMERA_SHAKE_SPEED = 20
+local SPAWN_OFFSET = Vector3.new(0, 0, -10)
 
 -- Car components
 local carModel
@@ -29,7 +29,7 @@ local isDrifting = false
 -- Logging function
 local function log(msg, level)
     local timestamp = os.date("!%Y-%m-%dT%H:%M:%S.000Z")
-    local prefix = "[CarScript v2.12] [" .. timestamp .. "] [" .. (level or "INFO") .. "]"
+    local prefix = "[CarScript v2.14] [" .. timestamp .. "] [" .. (level or "INFO") .. "]"
     if level == "error" then
         warn(prefix .. " " .. msg)
     else
@@ -37,91 +37,72 @@ local function log(msg, level)
     end
 end
 
--- Wait for car to spawn after command
+-- Wait for asset to spawn
 local function waitForCar()
     local startTime = tick()
     repeat
         for _, model in pairs(Workspace:GetChildren()) do
-            if model.Name == "Vehicle" or model:FindFirstChildWhichIsA("BasePart") then -- Any part indicates the model
+            if model:IsA("Model") and model.Name:lower():match("barbaro") then
                 carModel = model
-                log("Detected spawned car model: " .. model.Name)
+                log("Detected spawned asset: " .. model.Name)
                 break
             end
         end
         if not carModel and tick() - startTime > 5 then
-            log("Car not detected within 5 seconds. Check game support for -gh command.", "error")
-            createFallbackCar()
-            break
+            log("Asset not detected within 5 seconds. Check -gh command support.", "error")
+            return
         end
         wait(0.1)
     until carModel
     if carModel then
-        -- Detach from character if attached
         local hrp = character and character:FindFirstChild("HumanoidRootPart")
         if hrp and carModel:IsDescendantOf(character) then
             carModel.Parent = Workspace
             carModel:MoveTo(hrp.Position + SPAWN_OFFSET)
-            log("Detached car from character and moved to offset position.")
+            log("Detached asset and moved to offset.")
         end
-        -- Set first part as the driveable base
-        for _, part in pairs(carModel:GetChildren()) do
+        -- Ensure the model can move
+        for _, part in pairs(carModel:GetDescendants()) do
             if part:IsA("BasePart") then
                 part.Anchored = false
                 part.CanCollide = true
-                break
             end
         end
     end
 end
 
--- Spawn car using TextChatService command
+-- Spawn asset using TextChatService
 local function spawnCar()
     local success, err = pcall(function()
         TextChatService.TextChannels.RBXGeneral:SendAsync("-gh " .. CAR_MODEL_ID)
     end)
     if success then
-        log("Sent spawn command for Barbaro-Red (ID: " .. CAR_MODEL_ID .. "). Waiting for car...")
+        log("Sent spawn command for Barbaro-Red (ID: " .. CAR_MODEL_ID .. "). Waiting for asset...")
         waitForCar()
     else
-        log("Failed to send chat command. Error: " .. tostring(err) .. ". Falling back to custom car.", "error")
-        createFallbackCar()
+        log("Failed to send chat command. Error: " .. tostring(err), "error")
     end
 end
 
--- Create fallback car if command fails
-local function createFallbackCar()
-    carModel = Instance.new("Model")
-    carModel.Name = "FallbackCar"
-    carModel.Parent = Workspace
-
-    local chassis = Instance.new("Part")
-    chassis.Name = "Chassis"
-    chassis.Size = Vector3.new(6, 1.5, 12)
-    chassis.Position = (character and character.HumanoidRootPart.Position or Vector3.new(0, 10, 0)) + SPAWN_OFFSET
-    chassis.Anchored = false
-    chassis.CanCollide = true
-    chassis.BrickColor = BrickColor.new("Bright red")
-    chassis.Parent = carModel
-
-    carModel.PrimaryPart = chassis
-    log("Fallback Barbaro-Red-style car created due to command failure.")
-end
-
--- Setup car components
+-- Setup car
 local function setupCar()
-    if not carModel or not carModel.PrimaryPart then return end
+    if not carModel then return end
+    local primaryPart = carModel:FindFirstChildWhichIsA("BasePart")
+    if primaryPart then
+        bodyVelocity = Instance.new("BodyVelocity")
+        bodyVelocity.MaxForce = Vector3.new(4000, 0, 4000)
+        bodyVelocity.Velocity = Vector3.new(0, 0, 0)
+        bodyVelocity.Parent = primaryPart
 
-    bodyVelocity = Instance.new("BodyVelocity")
-    bodyVelocity.MaxForce = Vector3.new(4000, 0, 4000)
-    bodyVelocity.Velocity = Vector3.new(0, 0, 0)
-    bodyVelocity.Parent = carModel.PrimaryPart
-
-    bodyAngularVelocity = Instance.new("BodyAngularVelocity")
-    bodyAngularVelocity.MaxTorque = Vector3.new(0, 4000, 0)
-    bodyAngularVelocity.AngularVelocity = Vector3.new(0, 0, 0)
-    bodyAngularVelocity.Parent = carModel.PrimaryPart
-
-    log("Car setup complete.")
+        bodyAngularVelocity = Instance.new("BodyAngularVelocity")
+        bodyAngularVelocity.MaxTorque = Vector3.new(0, 4000, 0)
+        bodyAngularVelocity.AngularVelocity = Vector3.new(0, 0, 0)
+        bodyAngularVelocity.Parent = primaryPart
+        log("Car setup complete using first BasePart.")
+    else
+        log("No BasePart found in asset. Aborting.", "error")
+        carModel:Destroy()
+    end
 end
 
 -- Input handling
@@ -136,10 +117,6 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
     elseif key == Enum.KeyCode.LeftShift or key == Enum.KeyCode.RightShift then
         keys.shift = true
         isDrifting = true
-        log("Drift mode activated.")
-        if carModel and carModel.PrimaryPart then
-            carModel.PrimaryPart.CustomPhysicalProperties = PhysicalProperties.new(1, DRIFT_FRICTION, 0.5, 1, 1)
-        end
     end
 end)
 
@@ -153,29 +130,28 @@ UserInputService.InputEnded:Connect(function(input, gameProcessed)
     elseif key == Enum.KeyCode.LeftShift or key == Enum.KeyCode.RightShift then
         keys.shift = false
         isDrifting = false
-        log("Drift mode deactivated.")
-        if carModel and carModel.PrimaryPart then
-            carModel.PrimaryPart.CustomPhysicalProperties = PhysicalProperties.new(1, 0.8, 0.5, 1, 1)
-        end
     end
 end)
 
 -- Movement and drifting
 local lastTime = tick()
 RunService.Heartbeat:Connect(function()
-    if not carModel or not carModel.PrimaryPart then return end
+    if not carModel or not carModel:FindFirstChildWhichIsA("BasePart") then return end
 
     local dt = tick() - lastTime
     lastTime = tick()
 
+    local primaryPart = carModel:FindFirstChildWhichIsA("BasePart")
+    if not primaryPart then return end
+
     local moveVector = Vector3.new(0, 0, 0)
-    if keys.w then moveVector = moveVector + carModel.PrimaryPart.CFrame.LookVector * CAR_SPEED
-    elseif keys.s then moveVector = moveVector - carModel.PrimaryPart.CFrame.LookVector * CAR_SPEED end
+    if keys.w then moveVector = moveVector + primaryPart.CFrame.LookVector * CAR_SPEED
+    elseif keys.s then moveVector = moveVector - primaryPart.CFrame.LookVector * CAR_SPEED end
 
     local turnSpeed = keys.a and -2 or (keys.d and 2 or 0)
     if isDrifting then
         turnSpeed = turnSpeed * DRIFT_TURN_MULTIPLIER
-        local driftForce = carModel.PrimaryPart.CFrame.RightVector * (keys.a and -DRIFT_FORCE or (keys.d and DRIFT_FORCE or 0))
+        local driftForce = primaryPart.CFrame.RightVector * (keys.a and -DRIFT_FORCE or (keys.d and DRIFT_FORCE or 0))
         bodyVelocity.MaxForce = Vector3.new(4000 + DRIFT_FORCE, 0, 4000 + DRIFT_FORCE)
         bodyVelocity.Velocity = moveVector + driftForce
         camera.CFrame = camera.CFrame * CFrame.Angles(0, 0, math.rad(turnSpeed * 5 * dt))
@@ -185,7 +161,7 @@ RunService.Heartbeat:Connect(function()
     end
     bodyAngularVelocity.AngularVelocity = Vector3.new(0, turnSpeed, 0)
 
-    if carModel.PrimaryPart.Velocity.Magnitude > 5 then
+    if primaryPart.Velocity.Magnitude > 5 then
         local shakeIntensity = isDrifting and CAMERA_SHAKE_INTENSITY * 1.5 or CAMERA_SHAKE_INTENSITY
         local shake = math.sin(tick() * CAMERA_SHAKE_SPEED) * shakeIntensity * dt
         camera.CFrame = camera.CFrame * CFrame.new(shake, shake * 0.5, 0)
@@ -194,9 +170,9 @@ end)
 
 -- Camera setup
 local function updateCamera()
-    if carModel and carModel.PrimaryPart then
+    if carModel and carModel:FindFirstChildWhichIsA("BasePart") then
         camera.CameraType = Enum.CameraType.Follow
-        camera.CameraSubject = carModel.PrimaryPart
+        camera.CameraSubject = carModel:FindFirstChildWhichIsA("BasePart")
         camera.FieldOfView = 70
     end
 end
