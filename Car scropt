@@ -7,6 +7,7 @@ local Workspace = game:GetService("Workspace")
 local TextChatService = game:GetService("TextChatService")
 
 local player = Players.LocalPlayer
+local character = player.Character
 local camera = Workspace.CurrentCamera
 
 -- Car settings
@@ -20,6 +21,7 @@ local DRIFT_FRICTION = 0.1
 local DRIFT_TURN_MULTIPLIER = 1.5
 local DRIFT_FORCE = 2000
 local WHEEL_SEARCH_DEPTH = 2
+local SPAWN_OFFSET = Vector3.new(0, 0, -10) -- Offset to detach from character
 
 -- Car components
 local carModel
@@ -33,7 +35,7 @@ local isDrifting = false
 -- Logging function
 local function log(msg, level)
     local timestamp = os.date("!%Y-%m-%dT%H:%M:%S.000Z")
-    local prefix = "[CarScript v2.10] [" .. timestamp .. "] [" .. (level or "INFO") .. "]"
+    local prefix = "[CarScript v2.11] [" .. timestamp .. "] [" .. (level or "INFO") .. "]"
     if level == "error" then
         warn(prefix .. " " .. msg)
     else
@@ -46,7 +48,7 @@ local function waitForCar()
     local startTime = tick()
     repeat
         for _, model in pairs(Workspace:GetChildren()) do
-            if model.Name == "Vehicle" or model:FindFirstChild("Chassis") then -- Adjust based on game’s spawn behavior
+            if model.Name == "Vehicle" or model:FindFirstChild("Chassis") or model:FindFirstChild("Body") then
                 carModel = model
                 log("Detected spawned car model: " .. model.Name)
                 break
@@ -59,6 +61,15 @@ local function waitForCar()
         end
         wait(0.1)
     until carModel
+    if carModel then
+        -- Detach from character if attached
+        local hrp = character and character:FindFirstChild("HumanoidRootPart")
+        if hrp and carModel:IsDescendantOf(character) then
+            carModel.Parent = Workspace
+            carModel:MoveTo(hrp.Position + SPAWN_OFFSET)
+            log("Detached car from character and moved to offset position.")
+        end
+    end
 end
 
 -- Spawn car using TextChatService command
@@ -84,7 +95,7 @@ local function createFallbackCar()
     chassis = Instance.new("Part")
     chassis.Name = "Chassis"
     chassis.Size = Vector3.new(6, 1.5, 12)
-    chassis.Position = player.Character.HumanoidRootPart.Position + Vector3.new(0, 5, 0)
+    chassis.Position = (character and character.HumanoidRootPart.Position or Vector3.new(0, 10, 0)) + SPAWN_OFFSET
     chassis.Anchored = false
     chassis.CanCollide = true
     chassis.BrickColor = BrickColor.new("Bright red")
@@ -129,7 +140,8 @@ local function findComponents()
             if #wheels >= 4 then break end
         end
         if #wheels < 4 then
-            log("Warning: Found only " .. #wheels .. " wheels. Expected 4.", "error")
+            log("Warning: Found only " .. #wheels .. " wheels. Expected 4. Adding fallback wheels.", "error")
+            addFallbackWheels()
         end
         cameraPart = carModel:FindFirstChild("CameraPart") or chassis
     else
@@ -139,9 +151,36 @@ local function findComponents()
     end
 end
 
+-- Add fallback wheels if needed
+local function addFallbackWheels()
+    local wheelPositions = {
+        {x = -2.5, z = -5}, {x = 2.5, z = -5}, {x = -2.5, z = 5}, {x = 2.5, z = 5}
+    }
+    for i, pos in pairs(wheelPositions) do
+        if not wheels[i] then
+            local wheel = Instance.new("Part")
+            wheel.Name = "Wheel" .. i
+            wheel.Shape = Enum.PartType.Cylinder
+            wheel.Size = Vector3.new(1.8, 1.2, 1.8)
+            wheel.Position = chassis.Position + Vector3.new(pos.x, -0.6, pos.z)
+            wheel.Anchored = false
+            wheel.CanCollide = true
+            wheel.CustomPhysicalProperties = PhysicalProperties.new(1, 0.8, 0.5, 1, 1)
+            wheel.BrickColor = BrickColor.new("Black")
+            wheel.Parent = carModel
+            wheels[i] = wheel
+            log("Added fallback wheel " .. i .. " due to missing wheels.")
+        end
+    end
+end
+
 -- Setup car components
 local function setupCar()
     if not carModel or not chassis then return end
+
+    -- Ensure chassis is not anchored and has physics
+    chassis.Anchored = false
+    chassis.CanCollide = true
 
     bodyVelocity = Instance.new("BodyVelocity")
     bodyVelocity.MaxForce = Vector3.new(4000, 0, 4000)
@@ -155,6 +194,8 @@ local function setupCar()
 
     for i, wheel in pairs(wheels) do
         if wheel then
+            wheel.Anchored = false
+            wheel.CanCollide = true
             local spring = Instance.new("SpringConstraint")
             spring.Attachment0 = Instance.new("Attachment", chassis)
             spring.Attachment1 = Instance.new("Attachment", wheel)
