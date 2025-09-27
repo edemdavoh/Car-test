@@ -1,22 +1,16 @@
 -- Roblox Car Script with Realistic Suspension, Camera Shakes, and Drifting
--- Executor-friendly: Uses HTTP to fetch car model (ID: 15834447839)
--- No InsertService, works with Delta Executor
+-- Luau script for Delta Executor, spawns Barbaro-Red (ID: 15834447839) using asset ID
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
-local HttpService = game:GetService("HttpService")
+local InsertService = game:GetService("InsertService") -- Attempting direct use, fallback if blocked
 
 local player = Players.LocalPlayer
 local camera = Workspace.CurrentCamera
 
--- Enable HTTP requests
-if not game:GetService("HttpService"):GetHttpEnabled() then
-    game:GetService("HttpService").HttpEnabled = true
-end
-
 -- Car settings
-local CAR_MODEL_ID = 15834447839 -- Your car model ID
+local CAR_MODEL_ID = 15834447839 -- Barbaro-Red car from catalog
 local CAR_SPEED = 50 -- Studs per second (~30-40 mph)
 local SUSPENSION_STRENGTH = 100
 local SUSPENSION_DAMPING = 10
@@ -39,7 +33,7 @@ local isDrifting = false
 -- Logging function
 local function log(msg, level)
     local timestamp = os.date("!%Y-%m-%dT%H:%M:%S.000Z")
-    local prefix = "[CarScript v2.5] [" .. timestamp .. "] [" .. (level or "INFO") .. "]"
+    local prefix = "[CarScript v2.8] [" .. timestamp .. "] [" .. (level or "INFO") .. "]"
     if level == "error" then
         warn(prefix .. " " .. msg)
     else
@@ -47,66 +41,23 @@ local function log(msg, level)
     end
 end
 
--- Fetch and spawn car model via HTTP
-local function fetchCar()
-    local assetUrl = "https://assetdelivery.roblox.com/v1/asset/?id=" .. CAR_MODEL_ID
-    local success, response = pcall(function()
-        return game:HttpGet(assetUrl)
+-- Spawn car using asset ID
+local function spawnCar()
+    local success, model = pcall(function()
+        return InsertService:LoadAsset(CAR_MODEL_ID)
     end)
-    if success and response then
-        carModel = Instance.new("Model")
-        carModel.Name = "CustomCar"
+    if success and model then
+        carModel = model:Clone()
         carModel.Parent = Workspace
-
-        -- Simple XML parsing (basic recreation—assumes RBXM format)
-        local xmlData = response
-        local position = player.Character.HumanoidRootPart.Position + Vector3.new(0, 5, 0)
-        local function parseXML(data, parent)
-            local currentPos = 1
-            while currentPos <= #data do
-                local startTag = data:find("<Item", currentPos)
-                if not startTag then break end
-                local endTag = data:find("</Item>", startTag)
-                if endTag then
-                    local itemData = data:sub(startTag, endTag + 6)
-                    local className = itemData:match('class="([^"]+)"')
-                    if className and className:lower() == "part" then
-                        local part = Instance.new("Part")
-                        part.Name = itemData:match('name="([^"]+)"') or "Part"
-                        part.Size = Vector3.new(5, 1, 8) -- Default size, adjust if XML has size
-                        part.Position = position
-                        part.Anchored = false
-                        part.CanCollide = true
-                        part.Parent = carModel
-                        if part.Name:lower() == "chassis" then
-                            chassis = part
-                            chassis.Position = position
-                        elseif part.Name:lower():match("wheel") then
-                            table.insert(wheels, part)
-                            part.Shape = Enum.PartType.Cylinder
-                            part.Size = Vector3.new(1.5, 1, 1.5)
-                            part.Position = position + Vector3.new(#wheels == 1 and -2 or (#wheels == 2 and 2 or (#wheels == 3 and -2 or 2)), -0.5, #wheels <= 2 and -3 or 3)
-                        end
-                    end
-                    currentPos = endTag + 1
-                end
-            end
-        end
-
-        parseXML(response, carModel)
-        if chassis and #wheels >= 4 then
-            log("Car fetched and spawned successfully (ID: " .. CAR_MODEL_ID .. ").")
-        else
-            log("Failed to parse car model. Falling back to basic setup.", "error")
-            createFallbackCar()
-        end
+        carModel:MoveTo(player.Character.HumanoidRootPart.Position + Vector3.new(0, 5, 0))
+        log("Barbaro-Red car spawned successfully from asset ID: " .. CAR_MODEL_ID .. ".")
     else
-        log("HTTP fetch failed for ID: " .. CAR_MODEL_ID .. ". Error: " .. tostring(response), "error")
+        log("Failed to load asset ID: " .. CAR_MODEL_ID .. ". Error: " .. tostring(model) .. ". Falling back to custom car.", "error")
         createFallbackCar()
     end
 end
 
--- Create fallback car if HTTP fails
+-- Create fallback car if asset load fails
 local function createFallbackCar()
     carModel = Instance.new("Model")
     carModel.Name = "FallbackCar"
@@ -114,22 +65,22 @@ local function createFallbackCar()
 
     chassis = Instance.new("Part")
     chassis.Name = "Chassis"
-    chassis.Size = Vector3.new(5, 1, 8)
+    chassis.Size = Vector3.new(6, 1.5, 12)
     chassis.Position = player.Character.HumanoidRootPart.Position + Vector3.new(0, 5, 0)
     chassis.Anchored = false
     chassis.CanCollide = true
-    chassis.BrickColor = BrickColor.new("Bright blue")
+    chassis.BrickColor = BrickColor.new("Bright red")
     chassis.Parent = carModel
 
     local wheelPositions = {
-        {x = -2, z = -3}, {x = 2, z = -3}, {x = -2, z = 3}, {x = 2, z = 3}
+        {x = -2.5, z = -5}, {x = 2.5, z = -5}, {x = -2.5, z = 5}, {x = 2.5, z = 5}
     }
     for i, pos in pairs(wheelPositions) do
         local wheel = Instance.new("Part")
         wheel.Name = "Wheel" .. i
         wheel.Shape = Enum.PartType.Cylinder
-        wheel.Size = Vector3.new(1.5, 1, 1.5)
-        wheel.Position = chassis.Position + Vector3.new(pos.x, -0.5, pos.z)
+        wheel.Size = Vector3.new(1.8, 1.2, 1.8)
+        wheel.Position = chassis.Position + Vector3.new(pos.x, -0.6, pos.z)
         wheel.Anchored = false
         wheel.CanCollide = true
         wheel.CustomPhysicalProperties = PhysicalProperties.new(1, 0.8, 0.5, 1, 1)
@@ -139,7 +90,34 @@ local function createFallbackCar()
     end
 
     cameraPart = chassis
-    log("Fallback car created.")
+    log("Fallback Barbaro-Red-style car created.")
+end
+
+-- Find car components
+local function findComponents()
+    if not carModel then return end
+    chassis = carModel:FindFirstChild("Chassis") or carModel:FindFirstChild("Body")
+    if not chassis then
+        log("Chassis/Body not found in asset. Using first part as chassis.", "error")
+        chassis = carModel:FindFirstChildWhichIsA("BasePart")
+    end
+    if chassis then
+        for i = 1, WHEEL_SEARCH_DEPTH do
+            for _, part in pairs(carModel:GetDescendants()) do
+                if part:IsA("BasePart") and part.Name:lower():match("wheel") and #wheels < 4 then
+                    table.insert(wheels, part)
+                end
+            end
+            if #wheels >= 4 then break end
+        end
+        if #wheels < 4 then
+            log("Warning: Found only " .. #wheels .. " wheels. Expected 4.", "error")
+        end
+        cameraPart = carModel:FindFirstChild("CameraPart") or chassis
+    else
+        log("No valid chassis found. Falling back to custom setup.", "error")
+        createFallbackCar()
+    end
 end
 
 -- Setup car components
@@ -281,10 +259,11 @@ local function init()
         player.CharacterAdded:Wait()
     end
     bypassAntiCheat()
-    fetchCar()
+    spawnCar()
+    findComponents()
     setupCar()
     updateCamera()
 end
 
 init()
-log("Roblox car script with drifting loaded. Use WASD to drive, Shift to drift. Speed: " .. CAR_SPEED .. " studs/s.")
+log("Barbaro-Red car script with drifting loaded. Use WASD to drive, Shift to drift. Speed: " .. CAR_SPEED .. " studs/s.")
