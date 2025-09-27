@@ -1,23 +1,31 @@
 -- Roblox Car Script with Realistic Suspension, Camera Shakes, and Drifting
--- Executor-friendly: No InsertService, spawns car dynamically
--- Car Model ID not needed—creates a custom car in workspace
+-- Executor-friendly: Uses HTTP to fetch car model (ID: 15834447839)
+-- No InsertService, works with Delta Executor
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
+local HttpService = game:GetService("HttpService")
 
 local player = Players.LocalPlayer
 local camera = Workspace.CurrentCamera
 
+-- Enable HTTP requests
+if not game:GetService("HttpService"):GetHttpEnabled() then
+    game:GetService("HttpService").HttpEnabled = true
+end
+
 -- Car settings
-local CAR_SPEED = 50 -- Studs per second (fast but not too fast)
-local SUSPENSION_STRENGTH = 100 -- Spring strength for suspension
-local SUSPENSION_DAMPING = 10 -- Damping for realistic bounce
-local CAMERA_SHAKE_INTENSITY = 0.5 -- Base camera shake amount
-local CAMERA_SHAKE_SPEED = 20 -- Camera shake oscillation speed
-local DRIFT_FRICTION = 0.1 -- Reduced friction for drifting
-local DRIFT_TURN_MULTIPLIER = 1.5 -- Extra turn speed during drift
-local DRIFT_FORCE = 2000 -- Lateral force for sliding
+local CAR_MODEL_ID = 15834447839 -- Your car model ID
+local CAR_SPEED = 50 -- Studs per second (~30-40 mph)
+local SUSPENSION_STRENGTH = 100
+local SUSPENSION_DAMPING = 10
+local CAMERA_SHAKE_INTENSITY = 0.5
+local CAMERA_SHAKE_SPEED = 20
+local DRIFT_FRICTION = 0.1
+local DRIFT_TURN_MULTIPLIER = 1.5
+local DRIFT_FORCE = 2000
+local WHEEL_SEARCH_DEPTH = 2
 
 -- Car components
 local carModel
@@ -31,7 +39,7 @@ local isDrifting = false
 -- Logging function
 local function log(msg, level)
     local timestamp = os.date("!%Y-%m-%dT%H:%M:%S.000Z")
-    local prefix = "[CarScript v2.4] [" .. timestamp .. "] [" .. (level or "INFO") .. "]"
+    local prefix = "[CarScript v2.5] [" .. timestamp .. "] [" .. (level or "INFO") .. "]"
     if level == "error" then
         warn(prefix .. " " .. msg)
     else
@@ -39,35 +47,89 @@ local function log(msg, level)
     end
 end
 
--- Create custom car in workspace
-local function createCar()
+-- Fetch and spawn car model via HTTP
+local function fetchCar()
+    local assetUrl = "https://assetdelivery.roblox.com/v1/asset/?id=" .. CAR_MODEL_ID
+    local success, response = pcall(function()
+        return game:HttpGet(assetUrl)
+    end)
+    if success and response then
+        carModel = Instance.new("Model")
+        carModel.Name = "CustomCar"
+        carModel.Parent = Workspace
+
+        -- Simple XML parsing (basic recreation—assumes RBXM format)
+        local xmlData = response
+        local position = player.Character.HumanoidRootPart.Position + Vector3.new(0, 5, 0)
+        local function parseXML(data, parent)
+            local currentPos = 1
+            while currentPos <= #data do
+                local startTag = data:find("<Item", currentPos)
+                if not startTag then break end
+                local endTag = data:find("</Item>", startTag)
+                if endTag then
+                    local itemData = data:sub(startTag, endTag + 6)
+                    local className = itemData:match('class="([^"]+)"')
+                    if className and className:lower() == "part" then
+                        local part = Instance.new("Part")
+                        part.Name = itemData:match('name="([^"]+)"') or "Part"
+                        part.Size = Vector3.new(5, 1, 8) -- Default size, adjust if XML has size
+                        part.Position = position
+                        part.Anchored = false
+                        part.CanCollide = true
+                        part.Parent = carModel
+                        if part.Name:lower() == "chassis" then
+                            chassis = part
+                            chassis.Position = position
+                        elseif part.Name:lower():match("wheel") then
+                            table.insert(wheels, part)
+                            part.Shape = Enum.PartType.Cylinder
+                            part.Size = Vector3.new(1.5, 1, 1.5)
+                            part.Position = position + Vector3.new(#wheels == 1 and -2 or (#wheels == 2 and 2 or (#wheels == 3 and -2 or 2)), -0.5, #wheels <= 2 and -3 or 3)
+                        end
+                    end
+                    currentPos = endTag + 1
+                end
+            end
+        end
+
+        parseXML(response, carModel)
+        if chassis and #wheels >= 4 then
+            log("Car fetched and spawned successfully (ID: " .. CAR_MODEL_ID .. ").")
+        else
+            log("Failed to parse car model. Falling back to basic setup.", "error")
+            createFallbackCar()
+        end
+    else
+        log("HTTP fetch failed for ID: " .. CAR_MODEL_ID .. ". Error: " .. tostring(response), "error")
+        createFallbackCar()
+    end
+end
+
+-- Create fallback car if HTTP fails
+local function createFallbackCar()
     carModel = Instance.new("Model")
-    carModel.Name = "CustomCar"
+    carModel.Name = "FallbackCar"
     carModel.Parent = Workspace
 
-    -- Chassis
     chassis = Instance.new("Part")
     chassis.Name = "Chassis"
-    chassis.Size = Vector3.new(5, 1, 8) -- Length, height, width
+    chassis.Size = Vector3.new(5, 1, 8)
     chassis.Position = player.Character.HumanoidRootPart.Position + Vector3.new(0, 5, 0)
     chassis.Anchored = false
     chassis.CanCollide = true
     chassis.BrickColor = BrickColor.new("Bright blue")
     chassis.Parent = carModel
 
-    -- Wheels
     local wheelPositions = {
-        {x = -2, z = -3}, -- Front left
-        {x = 2, z = -3}, -- Front right
-        {x = -2, z = 3}, -- Rear left
-        {x = 2, z = 3} -- Rear right
+        {x = -2, z = -3}, {x = 2, z = -3}, {x = -2, z = 3}, {x = 2, z = 3}
     }
-    for i = 1, 4 do
+    for i, pos in pairs(wheelPositions) do
         local wheel = Instance.new("Part")
         wheel.Name = "Wheel" .. i
         wheel.Shape = Enum.PartType.Cylinder
         wheel.Size = Vector3.new(1.5, 1, 1.5)
-        wheel.Position = chassis.Position + Vector3.new(wheelPositions[i].x, -0.5, wheelPositions[i].z)
+        wheel.Position = chassis.Position + Vector3.new(pos.x, -0.5, pos.z)
         wheel.Anchored = false
         wheel.CanCollide = true
         wheel.CustomPhysicalProperties = PhysicalProperties.new(1, 0.8, 0.5, 1, 1)
@@ -76,28 +138,24 @@ local function createCar()
         wheels[i] = wheel
     end
 
-    cameraPart = chassis -- Use chassis as camera follow point (add "CameraPart" if needed)
-
-    log("Custom car spawned in workspace.")
+    cameraPart = chassis
+    log("Fallback car created.")
 end
 
 -- Setup car components
 local function setupCar()
-    if not carModel then return end
+    if not carModel or not chassis then return end
 
-    -- BodyVelocity for movement
     bodyVelocity = Instance.new("BodyVelocity")
     bodyVelocity.MaxForce = Vector3.new(4000, 0, 4000)
     bodyVelocity.Velocity = Vector3.new(0, 0, 0)
     bodyVelocity.Parent = chassis
 
-    -- BodyAngularVelocity for steering
     bodyAngularVelocity = Instance.new("BodyAngularVelocity")
     bodyAngularVelocity.MaxTorque = Vector3.new(0, 4000, 0)
     bodyAngularVelocity.AngularVelocity = Vector3.new(0, 0, 0)
     bodyAngularVelocity.Parent = chassis
 
-    -- Suspension (SpringConstraints for wheels)
     for i, wheel in pairs(wheels) do
         if wheel then
             local spring = Instance.new("SpringConstraint")
@@ -223,7 +281,7 @@ local function init()
         player.CharacterAdded:Wait()
     end
     bypassAntiCheat()
-    createCar() -- Use createCar instead of loadCar
+    fetchCar()
     setupCar()
     updateCamera()
 end
